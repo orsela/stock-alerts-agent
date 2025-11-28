@@ -1,4 +1,4 @@
-"""Stock Alerts v3.1 - Fixed yfinance errors with caching"""
+"""Stock Alerts v3.1 - Fixed AttributeError in load_rules"""
 import streamlit as st
 import json, os, hashlib, time
 import yfinance as yf
@@ -50,11 +50,18 @@ def get_stock_data(symbol):
 def load_rules(email):
     if os.path.exists(RULES_FILE):
         all_rules = json.load(open(RULES_FILE))
-        return all_rules.get(email, [])
+        # Handle cases where rules.json might be a list (from old versions)
+        if isinstance(all_rules, list):
+            return []
+        if isinstance(all_rules, dict):
+            return all_rules.get(email, [])
     return []
 
 def save_rules(email, rules):
     all_rules = json.load(open(RULES_FILE)) if os.path.exists(RULES_FILE) else {}
+    # Ensure all_rules is always a dictionary
+    if not isinstance(all_rules, dict):
+        all_rules = {}
     all_rules[email] = rules
     with open(RULES_FILE, 'w') as f: json.dump(all_rules, f, indent=2)
 
