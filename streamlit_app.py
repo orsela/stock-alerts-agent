@@ -3,6 +3,9 @@ import json
 import os
 import yfinance as yf
 from datetime import datetime
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # Dark theme CSS
 DARK_THEME = """
@@ -65,6 +68,47 @@ def save_rules(rules):
     with open(RULES_FILE, "w") as f:
         json.dump(rules, f, indent=2)
 
+def send_email_alert(symbol, price, target_price, condition):
+    """Send email alert when stock condition is met"""
+    try:
+        # Get credentials from secrets
+        sender_email = st.secrets["gmail"]["email"]
+        app_password = st.secrets["gmail"]["app_password"]
+        
+        # Create message
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = sender_email
+        msg['Subject'] = f'התראת מניה: {symbol}'
+        
+        # Email body in Hebrew
+        body = f"""
+שלום,
+
+התנאי עבור המניה {symbol} התקיים!
+
+מחיר נוכחי: ${price:.2f}
+מחיר יעד: ${target_price:.2f}
+תנאי: {condition}
+
+זמן: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+בברכה,
+מערכת התראות מניות
+        """
+        
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        # Send email
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(sender_email, app_password)
+            server.send_message(msg)
+            
+        return True
+    except Exception as e:
+        st.error(f"שגיאה בשליחת מייל: {str(e)}")
+        return False
+
 if 'rules' not in st.session_state:
     st.session_state.rules = load_rules()
     if not st.session_state.rules:
@@ -95,6 +139,15 @@ with col4:
         st.session_state.current_page = "settings"
 
 st.divider()
+
+    # Test email button
+    if st.button("📧 שלח מייל ניסיון"):
+        with st.spinner('שולח מייל...'):
+            test_symbol = "TSLA"
+            test_price = 430.17
+            test_target = 400.0
+            if send_email_alert(test_symbol, test_price, test_target, "בדיקת מערכת"):
+                st.success("המייל נשלח בהצלחה! בדוק את orsela@gmail.com")
 
 if st.session_state.current_page == "dashboard":
     col_title, col_badge = st.columns([3, 1])
