@@ -6,6 +6,8 @@ from datetime import datetime
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from telegram import Bot
+from twilio.rest import Client
 
 # Dark theme CSS
 DARK_THEME = """
@@ -109,6 +111,69 @@ def send_email_alert(symbol, price, target_price, condition):
         st.error(f"שגיאה בשליחת מייל: {str(e)}")
         return False
 
+def send_telegram_alert(symbol, price, target_price, condition):
+    """Send Telegram alert when stock condition is met"""
+    try:
+        # Get credentials from secrets
+        bot_token = st.secrets["telegram"]["bot_token"]
+        chat_id = st.secrets["telegram"]["chat_id"]
+        
+        # Create message in Hebrew
+        message = f"""
+📊 *התראת מניה*
+
+מניה: {symbol}
+מחיר נוכחי: ${price:.2f}
+מחיר יעד: ${target_price:.2f}
+תנאי: {condition}
+
+זמן: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        """
+        
+        # Send message
+        bot = Bot(token=bot_token)
+        import asyncio
+        asyncio.run(bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown'))
+        
+        return True
+    except Exception as e:
+        st.error(f"שגיאה בשליחת Telegram: {str(e)}")
+        return False
+
+def send_whatsapp_alert(symbol, price, target_price, condition):
+    """Send WhatsApp alert via Twilio when stock condition is met"""
+    try:
+        # Get credentials from secrets
+        account_sid = st.secrets["twilio"]["account_sid"]
+        auth_token = st.secrets["twilio"]["auth_token"]
+        from_whatsapp = st.secrets["twilio"]["from_number"]  # Format: 'whatsapp:+14155238886'
+        to_whatsapp = st.secrets["twilio"]["to_number"]      # Format: 'whatsapp:+972523697127'
+        
+        # Create message in Hebrew
+        message_body = f"""
+📊 התראת מניה
+
+מניה: {symbol}
+מחיר נוכחי: ${price:.2f}
+מחיר יעד: ${target_price:.2f}
+תנאי: {condition}
+
+זמן: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        """
+        
+        # Send WhatsApp message
+        client = Client(account_sid, auth_token)
+        message = client.messages.create(
+            from_=from_whatsapp,
+            body=message_body,
+            to=to_whatsapp
+        )
+        
+        return True
+    except Exception as e:
+        st.error(f"שגיאה בשליחת WhatsApp: {str(e)}")
+        return False
+
 if 'rules' not in st.session_state:
     st.session_state.rules = load_rules()
     if not st.session_state.rules:
@@ -148,6 +213,24 @@ st.divider()
             test_target = 400.0
             if send_email_alert(test_symbol, test_price, test_target, "בדיקת מערכת"):
                 st.success("המייל נשלח בהצלחה! בדוק את orsela@gmail.com")
+
+            # Test Telegram button
+    if st.button("📨 שלח Telegram ניסיון"):
+        with st.spinner('שולח Telegram...'):
+            test_symbol = "AAPL"
+            test_price = 278.85
+            test_target = 280.0
+            if send_telegram_alert(test_symbol, test_price, test_target, "בדיקת Telegram"):
+                st.success("ההודעה נשלחה בהצלחה ל-Telegram!")
+    
+    # Test WhatsApp button
+    if st.button("📱 שלח WhatsApp ניסיון"):
+        with st.spinner('שולח WhatsApp...'):
+            test_symbol = "NVDA"
+            test_price = 177.00
+            test_target = 180.0
+            if send_whatsapp_alert(test_symbol, test_price, test_target, "בדיקת WhatsApp"):
+                st.success("ההודעה נשלחה בהצלחה ל-WhatsApp במספר +972-523-697-127!")
 
 if st.session_state.current_page == "dashboard":
     col_title, col_badge = st.columns([3, 1])
