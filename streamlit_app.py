@@ -1,4 +1,4 @@
-"""Stock Alerts v2.5 - Simple Multi-User"""
+"""Stock Alerts v2.6 - Email as Username"""
 import streamlit as st
 import json
 import os
@@ -21,21 +21,20 @@ def save_users(users):
     with open(USERS_FILE, 'w') as f:
         json.dump(users, f, indent=2)
 
-def login(username, password):
+def login(email, password):
     users = load_users()
-    if username in users:
+    if email in users:
         pw_hash = hashlib.sha256(password.encode()).hexdigest()
-        if users[username]['password'] == pw_hash:
-            return users[username]
+        if users[email]['password'] == pw_hash:
+            return users[email]
     return None
 
-def register(username, password, email):
+def register(email, password):
     users = load_users()
-    if username in users:
+    if email in users:
         return False
-    users[username] = {
+    users[email] = {
         'password': hashlib.sha256(password.encode()).hexdigest(),
-        'email': email,
         'created': datetime.now().isoformat()
     }
     save_users(users)
@@ -60,28 +59,33 @@ if st.session_state.user is None:
     
     with tab1:
         with st.form("login"):
-            user = st.text_input("שם משתמש")
+            email = st.text_input("אימייל", placeholder="example@gmail.com")
             pw = st.text_input("סיסמה", type="password")
             if st.form_submit_button("התחבר"):
-                profile = login(user, pw)
+                profile = login(email, pw)
                 if profile:
-                    st.session_state.user = {'username': user, **profile}
+                    st.session_state.user = {'email': email, **profile}
                     st.rerun()
                 else:
-                    st.error("שגיאה בהתחברות")
+                    st.error("אימייל או סיסמה שגויים")
     
     with tab2:
         with st.form("register"):
-            new_user = st.text_input("שם משתמש חדש")
-            new_pw = st.text_input("סיסמה חדשה", type="password")
-            email = st.text_input("אימייל")
+            new_email = st.text_input("אימייל", placeholder="example@gmail.com")
+            new_pw = st.text_input("סיסמה", type="password")
+            confirm_pw = st.text_input("אימות סיסמה", type="password")
             if st.form_submit_button("הרשם"):
-                if register(new_user, new_pw, email):
-                    st.success("נרשמת בהצלחה!")
+                if new_pw != confirm_pw:
+                    st.error("הסיסמאות לא זהות")
+                elif not new_email or '@' not in new_email:
+                    st.error("אנא הכנס אימייל תקין")
+                elif register(new_email, new_pw):
+                    st.success("נרשמת בהצלחה! עבור לכרטיסיית כניסה")
                 else:
-                    st.error("שם המשתמש תפוס")
+                    st.error("האימייל כבר רשום")
 else:
-    st.sidebar.title(f"שלום {st.session_state.user['username']}")
+    st.sidebar.title(f"שלום")
+    st.sidebar.caption(st.session_state.user['email'])
     if st.sidebar.button("יציאה"):
         st.session_state.user = None
         st.rerun()
@@ -105,4 +109,4 @@ else:
         else:
             st.error("לא נמצא")
     
-    st.caption(f"v2.5 | {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"v2.6 | {datetime.now().strftime('%H:%M:%S')}")
