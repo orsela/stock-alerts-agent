@@ -1,4 +1,4 @@
-"""Stock Alerts v3.0 - Complete Redesign"""
+"""Stock Alerts v3.1 - Fixed yfinance errors with caching"""
 import streamlit as st
 import json, os, hashlib, time
 import yfinance as yf
@@ -27,20 +27,24 @@ def register(email, pw):
     save_users(users)
     return True
 
-def get_stock_data(symbol, retries=3):
-    for i in range(retries):
-        try:
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period='1d')
-            if not hist.empty:
-                price = hist['Close'].iloc[-1]
-                volume = hist['Volume'].iloc[-1]
-                prev = ticker.info.get('previousClose', price)
-                change = ((price - prev) / prev * 100) if prev else 0
-                return {'price': round(price, 2), 'change': round(change, 2), 'volume': int(volume)}
-            time.sleep(1)
-        except: 
-            if i < retries - 1: time.sleep(2)
+@st.cache_data(ttl=60)
+def get_stock_data(symbol):
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+        prev_close = info.get('previousClose')
+        volume = info.get('volume', 0)
+        
+        if current_price and prev_close:
+            change = ((current_price - prev_close) / prev_close * 100)
+            return {
+                'price': round(current_price, 2), 
+                'change': round(change, 2), 
+                'volume': int(volume)
+            }
+    except:
+        pass
     return None
 
 def load_rules(email):
@@ -60,6 +64,7 @@ if 'rules' not in st.session_state: st.session_state.rules = []
 if st.session_state.user is None:
     st.title("📈 Stock Alerts")
     tab1, tab2 = st.tabs(["כניסה", "הרשמה"])
+    
     with tab1:
         with st.form("login"):
             email = st.text_input("אימייל", placeholder="example@gmail.com")
@@ -71,6 +76,7 @@ if st.session_state.user is None:
                     st.session_state.rules = load_rules(email)
                     st.rerun()
                 else: st.error("שגיאה")
+    
     with tab2:
         with st.form("reg"):
             email = st.text_input("אימייל")
@@ -89,16 +95,21 @@ else:
     
     st.title("📈 לוח בקרה")
     
+    # Market indices
     indices = {'^GSPC': 'S&P 500', '^IXIC': 'NASDAQ', 'BTC-USD': 'BITCOIN'}
     cols = st.columns(3)
     for col, (sym, name) in zip(cols, indices.items()):
-        data = get_stock_data(sym)
-        if data:
-            col.metric(name, f"${data['price']:,.2f}", f"{data['change']:+.2f}%")
+        with col:
+            data = get_stock_data(sym)
+            if data:
+                col.metric(name, f"${data['price']:,.2f}", f"{data['change']:+.2f}%")
+            else:
+                col.metric(name, "--", "--")
     
     st.divider()
     st.subheader("התראות שלי")
     
+    # Display alerts
     for i, rule in enumerate(st.session_state.rules):
         data = get_stock_data(rule['symbol'])
         if data:
@@ -106,7 +117,7 @@ else:
             c1.write(f"**{rule['symbol']}**")
             c2.metric("מחיר", f"${data['price']}")
             c3.caption(f"ווליום: {data['volume']:,}")
-            c4.caption(f"טווח: {rule['min']}-{rule['max']}")
+            c4.caption(f"טווח: ${rule['min']}-${rule['max']}")
             if c5.button("✖️", key=f"del_{i}"):
                 st.session_state.rules.pop(i)
                 save_rules(st.session_state.user['email'], st.session_state.rules)
@@ -127,4 +138,4 @@ else:
                 st.session_state.show_add = False
                 st.rerun()
     
-    st.caption(f"v3.0 | {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"v3.1 | {datetime.now().strftime('%H:%M:%S')}")
