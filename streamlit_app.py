@@ -1,106 +1,56 @@
 import streamlit as st
 import json
 import os
+import yfinance as yf
+from datetime import datetime
 
 # Dark theme CSS
 DARK_THEME = """
 <style>
-    .stApp {
-        background-color: #0a0a0a;
-        color: #ffffff;
-    }
-    .main-header {
-        text-align: right;
-        font-size: 28px;
-        font-weight: bold;
-        color: #ffffff;
-        padding: 10px 0;
-    }
-    .index-card {
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        border-radius: 12px;
-        padding: 15px;
-        margin: 5px;
-        text-align: center;
-    }
-    .index-name {
-        color: #888;
-        font-size: 14px;
-    }
-    .index-value {
-        color: #fff;
-        font-size: 20px;
-        font-weight: bold;
-    }
-    .index-change-up {
-        color: #00ff88;
-        font-size: 14px;
-    }
-    .index-change-down {
-        color: #ff4444;
-        font-size: 14px;
-    }
-    .alert-card {
-        background: #1a1a2e;
-        border-radius: 12px;
-        padding: 15px;
-        margin: 10px 0;
-        border-left: 4px solid #3b82f6;
-    }
-    .stock-symbol {
-        font-size: 18px;
-        font-weight: bold;
-        color: #fff;
-    }
-    .stock-price {
-        font-size: 24px;
-        color: #fff;
-    }
-    .target-price {
-        color: #00ff88;
-        font-size: 14px;
-    }
-    .section-title {
-        color: #fff;
-        font-size: 20px;
-        font-weight: bold;
-        text-align: right;
-        margin: 20px 0 10px 0;
-    }
-    .stButton > button {
-        background: linear-gradient(90deg, #3b82f6 0%, #2563eb 100%);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 10px 30px;
-        font-size: 16px;
-        width: 100%;
-    }
-    .stTextInput > div > div > input {
-        background-color: #1a1a2e;
-        color: #fff;
-        border: 1px solid #333;
-        border-radius: 8px;
-    }
-    .stNumberInput > div > div > input {
-        background-color: #1a1a2e;
-        color: #fff;
-        border: 1px solid #333;
-    }
-    .progress-bar {
-        height: 6px;
-        background: #333;
-        border-radius: 3px;
-        overflow: hidden;
-    }
-    .progress-fill {
-        height: 100%;
-        background: linear-gradient(90deg, #00ff88, #ff4444);
-    }
+    .stApp { background-color: #0a0a0a; color: #ffffff; }
+    .main-header { text-align: right; font-size: 28px; font-weight: bold; color: #ffffff; padding: 10px 0; }
+    .index-card { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border-radius: 12px; padding: 15px; margin: 5px; text-align: center; }
+    .index-name { color: #888; font-size: 14px; }
+    .index-value { color: #fff; font-size: 20px; font-weight: bold; }
+    .index-change-up { color: #00ff88; font-size: 14px; }
+    .index-change-down { color: #ff4444; font-size: 14px; }
+    .alert-card { background: #1a1a2e; border-radius: 12px; padding: 15px; margin: 10px 0; border-left: 4px solid #3b82f6; }
+    .stock-symbol { font-size: 18px; font-weight: bold; color: #fff; }
+    .stock-price { font-size: 24px; color: #fff; }
+    .target-price { color: #00ff88; font-size: 14px; }
+    .section-title { color: #fff; font-size: 20px; font-weight: bold; text-align: right; margin: 20px 0 10px 0; }
+    .live-badge { background: #00ff88; color: #000; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
 </style>
 """
 
 RULES_FILE = "rules.json"
+
+@st.cache_data(ttl=60)
+def get_stock_price(symbol):
+    try:
+        ticker = yf.Ticker(symbol)
+        data = ticker.history(period="1d")
+        if not data.empty:
+            price = data['Close'].iloc[-1]
+            prev_close = ticker.info.get('previousClose', price)
+            change = ((price - prev_close) / prev_close) * 100 if prev_close else 0
+            return round(price, 2), round(change, 2)
+    except:
+        pass
+    return None, None
+
+@st.cache_data(ttl=60)
+def get_index_data():
+    indices = {
+        '^GSPC': ('S&P 500', None, None),
+        '^IXIC': ('NASDAQ', None, None),
+        '^TA125.TA': ('TA-125', None, None)
+    }
+    result = {}
+    for symbol, (name, _, _) in indices.items():
+        price, change = get_stock_price(symbol)
+        result[name] = (price, change)
+    return result
 
 def load_rules():
     if not os.path.exists(RULES_FILE):
@@ -120,7 +70,8 @@ if 'rules' not in st.session_state:
     if not st.session_state.rules:
         st.session_state.rules = [
             {"symbol": "TSLA", "min_price": 145.50, "max_price": 320.0, "target": 189.0, "notify_email": True, "notify_whatsapp": True, "active": True},
-            {"symbol": "AAPL", "min_price": 122.50, "max_price": 230.0, "target": 22.50, "notify_email": True, "notify_whatsapp": False, "active": True},
+            {"symbol": "AAPL", "min_price": 170.0, "max_price": 250.0, "target": 200.0, "notify_email": True, "notify_whatsapp": False, "active": True},
+            {"symbol": "NVDA", "min_price": 400.0, "max_price": 600.0, "target": 500.0, "notify_email": True, "notify_whatsapp": True, "active": True},
         ]
 
 if 'current_page' not in st.session_state:
@@ -129,7 +80,6 @@ if 'current_page' not in st.session_state:
 st.set_page_config(page_title="Stock Alerts", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(DARK_THEME, unsafe_allow_html=True)
 
-# Navigation
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     if st.button("Dashboard", use_container_width=True):
@@ -138,8 +88,8 @@ with col2:
     if st.button("Alerts", use_container_width=True):
         st.session_state.current_page = "alerts"
 with col3:
-    if st.button("Watchlist", use_container_width=True):
-        st.session_state.current_page = "watchlist"
+    if st.button("New Alert", use_container_width=True):
+        st.session_state.current_page = "new_alert"
 with col4:
     if st.button("Settings", use_container_width=True):
         st.session_state.current_page = "settings"
@@ -147,152 +97,141 @@ with col4:
 st.divider()
 
 if st.session_state.current_page == "dashboard":
-    st.markdown('<div class="main-header">שלום, משתמש</div>', unsafe_allow_html=True)
+    col_title, col_badge = st.columns([3, 1])
+    with col_title:
+        st.markdown('<div class="main-header">Dashboard</div>', unsafe_allow_html=True)
+    with col_badge:
+        st.markdown('<span class="live-badge">LIVE</span>', unsafe_allow_html=True)
     
-    # Market indices
+    indices = get_index_data()
     idx1, idx2, idx3 = st.columns(3)
-    with idx1:
-        st.markdown('''
-        <div class="index-card">
-            <div class="index-name">ת"א 35</div>
-            <div class="index-value">117.45</div>
-            <div class="index-change-down">▼ -1.37%</div>
-        </div>
-        ''', unsafe_allow_html=True)
-    with idx2:
-        st.markdown('''
-        <div class="index-card">
-            <div class="index-name">נאסד"ק</div>
-            <div class="index-value">+1,233.68</div>
-            <div class="index-change-up">▲ +0.93%</div>
-        </div>
-        ''', unsafe_allow_html=True)
-    with idx3:
-        st.markdown('''
-        <div class="index-card">
-            <div class="index-name">S&P 500</div>
-            <div class="index-value">222.66</div>
-            <div class="index-change-down">▼ -0.93%</div>
-        </div>
-        ''', unsafe_allow_html=True)
     
-    st.markdown('<div class="section-title">התראות חמות</div>', unsafe_allow_html=True)
+    for col, (name, (price, change)) in zip([idx1, idx2, idx3], indices.items()):
+        with col:
+            change_class = "index-change-up" if change and change >= 0 else "index-change-down"
+            arrow = "\u25b2" if change and change >= 0 else "\u25bc"
+            price_str = f"{price:,.2f}" if price else "N/A"
+            change_str = f"{arrow} {change:+.2f}%" if change else "N/A"
+            st.markdown(f'''
+            <div class="index-card">
+                <div class="index-name">{name}</div>
+                <div class="index-value">{price_str}</div>
+                <div class="{change_class}">{change_str}</div>
+            </div>
+            ''', unsafe_allow_html=True)
     
-    hot1, hot2, hot3 = st.columns(3)
-    with hot1:
-        st.markdown('''
-        <div class="alert-card">
-            <div class="stock-symbol">TSLA</div>
-            <div class="stock-price">132.00</div>
-            <div class="target-price">מחיר יעד: 115.00 ↗</div>
-        </div>
-        ''', unsafe_allow_html=True)
-    with hot2:
-        st.markdown('''
-        <div class="alert-card">
-            <div class="stock-symbol">AAPL</div>
-            <div class="stock-price">285.00</div>
-            <div class="target-price">מחיר יעד: 258.00 ↗</div>
-        </div>
-        ''', unsafe_allow_html=True)
-    with hot3:
-        st.markdown('''
-        <div class="alert-card">
-            <div class="stock-symbol">NVDA</div>
-            <div class="stock-price">14.75</div>
-            <div class="target-price">מחיר יעד: 138.00 ↗</div>
-        </div>
-        ''', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Watchlist - Live Prices</div>', unsafe_allow_html=True)
     
-    st.markdown('<div class="section-title">רשימת מעקב</div>', unsafe_allow_html=True)
+    for rule in st.session_state.rules:
+        if rule.get('active', True):
+            price, change = get_stock_price(rule['symbol'])
+            col_a, col_b, col_c, col_d = st.columns([1, 2, 2, 1])
+            with col_a:
+                st.markdown(f"**{rule['symbol']}**")
+            with col_b:
+                if price:
+                    st.metric("Price", f"${price:.2f}", f"{change:+.2f}%")
+                else:
+                    st.write("Loading...")
+            with col_c:
+                st.caption(f"Target: ${rule.get('target', 0):.2f}")
+                if price and rule.get('target'):
+                    diff = ((rule['target'] - price) / price) * 100
+                    st.caption(f"Distance: {diff:+.1f}%")
+            with col_d:
+                if price and rule['min_price'] <= price <= rule['max_price']:
+                    st.success("IN RANGE")
+            st.divider()
     
-    for rule in st.session_state.rules[:3]:
-        col_a, col_b, col_c = st.columns([2, 3, 1])
-        with col_a:
-            st.markdown(f"**{rule['symbol']}**")
-            st.caption("מחיר ויעד")
-        with col_b:
-            st.write(f"${rule.get('target', 0):.2f}")
-        with col_c:
-            change = "+213.90" if rule['symbol'] == 'TSLA' else "-68.2%"
-            color = "green" if '+' in change else "red"
-            st.markdown(f"<span style='color:{color}'>{change}</span>", unsafe_allow_html=True)
+    if st.button("Refresh Prices"):
+        st.cache_data.clear()
+        st.rerun()
 
 elif st.session_state.current_page == "alerts":
-    st.markdown('<div class="main-header">התראות</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">Active Alerts</div>', unsafe_allow_html=True)
     
-    tab1, tab2 = st.tabs(["הופעלו לאחרונה", "פעילות"])
-    
-    with tab1:
-        for i, rule in enumerate(st.session_state.rules):
-            with st.container():
-                col1, col2, col3 = st.columns([1, 3, 1])
-                with col1:
-                    st.markdown(f"**{rule['symbol']}**")
-                with col2:
-                    progress = ((rule.get('target', 0) - rule['min_price']) / (rule['max_price'] - rule['min_price'])) * 100 if rule['max_price'] != rule['min_price'] else 50
-                    st.markdown(f"{rule['min_price']:.2f}-{rule['max_price']:.2f}")
-                    st.progress(min(max(progress/100, 0), 1))
-                    st.caption(f"יעד {rule.get('target', 0):.2f}")
-                with col3:
-                    rule['active'] = st.toggle("פעיל", value=rule.get('active', True), key=f"toggle_{i}")
-                st.divider()
+    for i, rule in enumerate(st.session_state.rules):
+        price, change = get_stock_price(rule['symbol'])
+        with st.container():
+            col1, col2, col3, col4 = st.columns([1, 2, 2, 1])
+            with col1:
+                st.markdown(f"**{rule['symbol']}**")
+                st.caption(f"${price:.2f}" if price else "N/A")
+            with col2:
+                st.write(f"Range: ${rule['min_price']:.2f} - ${rule['max_price']:.2f}")
+                if price:
+                    progress = (price - rule['min_price']) / (rule['max_price'] - rule['min_price'])
+                    st.progress(min(max(progress, 0), 1))
+            with col3:
+                st.caption(f"Target: ${rule.get('target', 0):.2f}")
+                alerts = []
+                if rule.get('notify_email'): alerts.append("Email")
+                if rule.get('notify_whatsapp'): alerts.append("WA")
+                st.caption(" | ".join(alerts))
+            with col4:
+                rule['active'] = st.toggle("Active", value=rule.get('active', True), key=f"toggle_{i}")
+                if st.button("Delete", key=f"del_{i}"):
+                    st.session_state.rules.pop(i)
+                    save_rules(st.session_state.rules)
+                    st.rerun()
+            st.divider()
 
-elif st.session_state.current_page == "watchlist":
-    st.markdown('<div class="main-header">יצירת התראה חדשה</div>', unsafe_allow_html=True)
+elif st.session_state.current_page == "new_alert":
+    st.markdown('<div class="main-header">Create New Alert</div>', unsafe_allow_html=True)
     
-    symbol = st.text_input("חפש מניה...", placeholder="AAPL, TSLA, NVDA...")
+    symbol = st.text_input("Stock Symbol", placeholder="AAPL, TSLA, NVDA...").upper()
+    
+    if symbol:
+        price, change = get_stock_price(symbol)
+        if price:
+            st.success(f"Current price: ${price:.2f} ({change:+.2f}%)")
+        else:
+            st.warning("Symbol not found")
     
     col1, col2 = st.columns(2)
     with col1:
-        price_type = st.radio("סוג מחיר", ["מחיר יעד", "שינוי באחוזים"], horizontal=True)
+        min_price = st.number_input("Min Price ($)", min_value=0.0, step=1.0)
+    with col2:
+        max_price = st.number_input("Max Price ($)", min_value=0.0, step=1.0)
+    
+    target = st.number_input("Target Price ($)", min_value=0.0, step=1.0)
     
     col3, col4 = st.columns(2)
     with col3:
-        if st.button("מתחת ↓", use_container_width=True):
-            pass
+        notify_email = st.checkbox("Email Alert", value=True)
     with col4:
-        if st.button("מעל ↑", use_container_width=True):
-            pass
+        notify_whatsapp = st.checkbox("WhatsApp Alert", value=True)
     
-    target_price = st.number_input("מחיר יעד", min_value=0.0, value=2580.0, step=0.5)
-    st.slider("בחר מחיר", min_value=0.0, max_value=5000.0, value=target_price)
-    
-    note = st.text_area("הערה אישית", placeholder="הוסף הערה...")
-    
-    with st.expander("חזרתיות"):
-        st.selectbox("תדירות", ["פעם אחת", "יומי", "שבועי"])
-    
-    if st.button("צור התראה", use_container_width=True, type="primary"):
-        if symbol:
+    if st.button("Create Alert", type="primary", use_container_width=True):
+        if symbol and max_price > min_price:
             new_rule = {
-                "symbol": symbol.upper(),
-                "min_price": target_price * 0.9,
-                "max_price": target_price * 1.1,
-                "target": target_price,
-                "notify_email": True,
-                "notify_whatsapp": True,
-                "active": True,
-                "note": note
+                "symbol": symbol,
+                "min_price": min_price,
+                "max_price": max_price,
+                "target": target,
+                "notify_email": notify_email,
+                "notify_whatsapp": notify_whatsapp,
+                "active": True
             }
             st.session_state.rules.append(new_rule)
             save_rules(st.session_state.rules)
-            st.success(f"התראה נוצרה עבור {symbol.upper()}!")
-            st.rerun()
+            st.success(f"Alert created for {symbol}!")
+            st.balloons()
+        else:
+            st.error("Please fill all fields correctly")
 
 elif st.session_state.current_page == "settings":
-    st.markdown('<div class="main-header">הגדרות</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">Settings</div>', unsafe_allow_html=True)
     
-    st.subheader("התראות")
-    email_alerts = st.toggle("התראות במייל", value=True)
-    whatsapp_alerts = st.toggle("התראות בווטסאפ", value=True)
+    st.subheader("Notifications")
+    st.text_input("Email", value="orsela@gmail.com", key="email")
+    st.text_input("WhatsApp", value="+972-523-697-127", key="whatsapp")
     
-    st.subheader("חשבונות מחוברים")
-    st.text_input("אימייל", value="orsela@gmail.com")
-    st.text_input("טלפון לווטסאפ", value="+972-523-697-127")
+    st.subheader("Data Source")
+    st.info("Using Yahoo Finance for real-time stock data")
     
-    if st.button("שמור הגדרות", type="primary"):
-        st.success("ההגדרות נשמרו!")
+    if st.button("Save Settings", type="primary"):
+        st.success("Settings saved!")
 
 st.markdown("---")
-st.caption("v2.0 | Stock Alerts Agent | Dark Mode")
+st.caption(f"v3.0 | Stock Alerts | Yahoo Finance | Last update: {datetime.now().strftime('%H:%M:%S')}")
