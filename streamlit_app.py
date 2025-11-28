@@ -1,254 +1,427 @@
-"""Production-Grade Stock Alerts Agent - Streamlit Application
-
-Features:
-- Market monitoring with yfinance (retry logic)
-- Email/WhatsApp/Telegram notifications
-- Professional UI with tabs and charts
-- Comprehensive error handling and logging
+"""
+🦅 Stock Sentinel v4.0 - Multi-User Mobile-First Edition
+נבנה לפי עיצוב UI/UX מקצועי עם Bottom Navigation
 """
 
 import streamlit as st
 import json
 import os
 import yfinance as yf
-from datetime import datetime
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timedelta
+import time
+import hashlib
 import logging
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+st.set_page_config(
+    page_title="Stock Sentinel Pro", 
+    page_icon="🦅", 
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Dark theme CSS
-DARK_THEME = """<style>
-.stApp { background-color: #0a0a0a; color: #ffffff; }
-.main-header { text-align: right; font-size: 28px; font-weight: bold; color: #ffffff; padding: 10px 0; }
-.index-card { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border-radius: 12px; padding: 15px; margin: 5px; text-align: center; }
-.index-value { color: #fff; font-size: 20px; font-weight: bold; }
-.index-change-up { color: #00ff88; font-size: 14px; }
-.index-change-down { color: #ff4444; font-size: 14px; }
-.alert-card { background: #1a1a2e; border-radius: 12px; padding: 15px; margin: 10px 0; border-left: 4px solid #3b82f6; }
-</style>"""
+USERS_FILE = "users_db.json"
+RULES_FILE = "rules_db.json"
+COOLDOWN_MINUTES = 60
 
-RULES_FILE = "rules.json"
+# ============================================================================
+# MOBILE-FIRST DARK THEME CSS
+# ============================================================================
 
-@st.cache_data(ttl=60)
-def get_stock_price(symbol):
-    """Fetch stock price with error handling"""
-    try:
-        ticker = yf.Ticker(symbol)
-        data = ticker.history(period="1d")
-        if not data.empty:
-            price = data['Close'].iloc[-1]
-            prev_close = ticker.info.get('previousClose', price)
-            change = ((price - prev_close) / prev_close) * 100 if prev_close else 0
-            logger.info(f"{symbol}: Price ${price:.2f}, Change {change:+.2f}%")
-            return round(price, 2), round(change, 2)
-    except Exception as e:
-        logger.warning(f"Error fetching {symbol}: {str(e)}")
-    return None, None
+MOBILE_THEME = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700&display=swap');
 
-@st.cache_data(ttl=60)
-def get_index_data():
-    """Fetch market indices"""
-    indices = {
-        '^GSPC': 'S&P 500',
-        '^IXIC': 'NASDAQ',
-        '^TA125.TA': 'TA-125'
-    }
-    result = {}
-    for symbol, name in indices.items():
-        price, change = get_stock_price(symbol)
-        result[name] = (price, change)
-    return result
+* {
+    font-family: 'Heebo', sans-serif !important;
+}
 
-def load_rules():
-    """Load alert rules from JSON"""
-    if not os.path.exists(RULES_FILE):
-        return []
-    try:
-        with open(RULES_FILE, 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Error loading rules: {e}")
-        return []
+.stApp {
+    background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
+    color: #ffffff;
+}
 
-def save_rules(rules):
-    """Save alert rules to JSON"""
-    try:
-        with open(RULES_FILE, 'w') as f:
-            json.dump(rules, f, indent=2)
-        logger.info("Rules saved successfully")
-    except Exception as e:
-        logger.error(f"Error saving rules: {e}")
+/* Login Screen */
+.login-container {
+    max-width: 400px;
+    margin: 50px auto;
+    padding: 30px;
+    background: rgba(30, 41, 59, 0.8);
+    border-radius: 20px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(10px);
+}
 
-def send_notification(symbol, price, target, condition, channel='email'):
-    """Send notification - mock mode (email disabled)"""
-    try:
-        if channel == 'email':
-            logger.info(f"[MOCK] Email sent: {symbol} @ ${price:.2f}")
+.app-logo {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+.app-title {
+    font-size: 28px;
+    font-weight: 700;
+    text-align: center;
+    background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 10px;
+}
+
+/* Market Cards */
+.market-card {
+    background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+    border-radius: 15px;
+    padding: 15px;
+    margin: 10px 5px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+    text-align: center;
+}
+
+.market-name {
+    font-size: 12px;
+    color: #94a3b8;
+    margin-bottom: 5px;
+}
+
+.market-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: #ffffff;
+    margin: 5px 0;
+}
+
+.market-change-positive {
+    font-size: 14px;
+    color: #10b981;
+    font-weight: 600;
+}
+
+.market-change-negative {
+    font-size: 14px;
+    color: #ef4444;
+    font-weight: 600;
+}
+
+/* Stock Cards */
+.stock-card {
+    background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+    border-radius: 20px;
+    padding: 20px;
+    margin: 15px 0;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.stock-symbol {
+    font-size: 24px;
+    font-weight: 700;
+    color: #ffffff;
+    margin-bottom: 10px;
+}
+
+.stock-price {
+    font-size: 28px;
+    font-weight: 700;
+    color: #3b82f6;
+}
+
+.stock-target {
+    font-size: 14px;
+    color: #94a3b8;
+    margin-top: 5px;
+}
+
+/* Bottom Navigation */
+.bottom-nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(15, 23, 42, 0.95);
+    backdrop-filter: blur(10px);
+    border-top: 1px solid rgba(59, 130, 246, 0.2);
+    padding: 10px 0;
+    z-index: 9999;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.nav-items {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: #64748b;
+    font-size: 11px;
+    text-decoration: none;
+    cursor: pointer;
+    padding: 5px 15px;
+    transition: all 0.3s ease;
+}
+
+.nav-item:hover, .nav-item.active {
+    color: #3b82f6;
+}
+
+.nav-icon {
+    font-size: 24px;
+    margin-bottom: 5px;
+}
+
+.nav-add-button {
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    color: white;
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
+    margin-top: -30px;
+}
+
+/* Buttons */
+.stButton > button {
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    padding: 12px 24px;
+    font-weight: 600;
+    font-size: 16px;
+    width: 100%;
+    box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+}
+
+/* Forms */
+.stTextInput > div > div > input {
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 10px;
+    color: white;
+    padding: 12px;
+    font-size: 16px;
+}
+
+/* Header */
+.main-header {
+    font-size: 24px;
+    font-weight: 700;
+    text-align: right;
+    color: #ffffff;
+    padding: 20px 0;
+    margin-bottom: 20px;
+}
+
+/* Spacing for bottom nav */
+.main-content {
+    padding-bottom: 100px;
+}
+
+/* RTL Support */
+.stApp {
+    direction: rtl;
+}
+
+</style>
+"""
+
+# ============================================================================
+# DATA MANAGEMENT CLASSES
+# ============================================================================
+
+class UserManager:
+    @staticmethod
+    def _load_users():
+        if not os.path.exists(USERS_FILE):
+            return {}
+        try:
+            with open(USERS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return {}
+
+    @staticmethod
+    def _save_users(users):
+        with open(USERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(users, f, indent=2, ensure_ascii=False)
+
+    @staticmethod
+    def register_user(username, password, email, phone=""):
+        users = UserManager._load_users()
+        if username in users:
+            return False, "שם משתמש תפוס"
+        
+        hashed_pw = hashlib.sha256(password.encode()).hexdigest()
+        users[username] = {
+            "password": hashed_pw,
+            "email": email,
+            "phone": phone,
+            "created_at": datetime.now().isoformat()
+        }
+        UserManager._save_users(users)
+        logger.info(f"✓ New user registered: {username}")
+        return True, "המשתמש נוצר בהצלחה!"
+
+    @staticmethod
+    def login_user(username, password):
+        users = UserManager._load_users()
+        if username not in users:
+            return None
+        
+        hashed_pw = hashlib.sha256(password.encode()).hexdigest()
+        if users[username]["password"] == hashed_pw:
+            logger.info(f"✓ User logged in: {username}")
+            return users[username]
+        return None
+
+class DataManager:
+    @staticmethod
+    def load_user_rules(username):
+        if not os.path.exists(RULES_FILE):
+            return []
+        try:
+            with open(RULES_FILE, 'r', encoding='utf-8') as f:
+                all_rules = json.load(f)
+                return all_rules.get(username, [])
+        except:
+            return []
+
+    @staticmethod
+    def save_user_rules(username, rules):
+        if not os.path.exists(RULES_FILE):
+            all_rules = {}
+        else:
+            try:
+                with open(RULES_FILE, 'r', encoding='utf-8') as f:
+                    all_rules = json.load(f)
+            except:
+                all_rules = {}
+        
+        all_rules[username] = rules
+        with open(RULES_FILE, 'w', encoding='utf-8') as f:
+            json.dump(all_rules, f, indent=2, ensure_ascii=False)
+        logger.info(f"✓ Saved {len(rules)} rules for {username}")
+
+    @staticmethod
+    def get_price(symbol, max_retries=2):
+        for attempt in range(max_retries):
+            try:
+                stock = yf.Ticker(symbol)
+                data = stock.history(period="1d")
+                if not data.empty:
+                    price = data['Close'].iloc[-1]
+                    prev_close = stock.info.get('previousClose', price)
+                    change = ((price - prev_close) / prev_close) * 100 if prev_close else 0
+                    return round(price, 2), round(change, 2)
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                logger.error(f"✗ Error fetching {symbol}: {e}")
+        return None, None
+
+class NotificationManager:
+    def __init__(self):
+        try:
+            self.sender_email = st.secrets["email"]["sender_email"]
+            self.sender_password = st.secrets["email"]["sender_password"]
+            self.is_configured = True
+            logger.info("✓ Email configured")
+        except:
+            self.is_configured = False
+            logger.warning("⚠ Email not configured - using mock mode")
+
+    def send_email(self, target_email, username, symbol, price, condition):
+        if not self.is_configured:
+            st.toast(f"📧 Mock: התראה נשלחה ל-{target_email}", icon="✉️")
             return True
-        elif channel == 'whatsapp':
-            logger.info(f"[MOCK] WhatsApp sent: {symbol} @ ${price:.2f}")
-            return True
-        elif channel == 'telegram':
-            logger.info(f"[MOCK] Telegram sent: {symbol} @ ${price:.2f}")
-            return True
-    except Exception as e:
-        logger.error(f"Notification error: {e}")
-        return False
 
-# Initialize session state
-if 'rules' not in st.session_state:
-    st.session_state.rules = load_rules()
-    if not st.session_state.rules:
-        st.session_state.rules = [
-            {"symbol": "TSLA", "min_price": 145.50, "max_price": 320.0, "target": 189.0, "notify_email": True, "active": True},
-            {"symbol": "AAPL", "min_price": 170.0, "max_price": 250.0, "target": 200.0, "notify_email": True, "active": True},
-            {"symbol": "NVDA", "min_price": 400.0, "max_price": 600.0, "target": 500.0, "notify_email": True, "active": True},
-        ]
+        subject = f"🚀 התראת מניה: {symbol}"
+        body = f"""
+שלום {username},
+
+מניה: {symbol}
+מחיר נוכחי: ${price:.2f}
+תנאי: {condition}
+זמן: {datetime.now().strftime('%d/%m/%Y %H:%M')}
+
+---
+Stock Sentinel Pro
+        """
+        
+        msg = MIMEMultipart()
+        msg['From'] = self.sender_email
+        msg['To'] = target_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
+        try:
+            with smtplib.SMTP('smtp.gmail.com', 587) as server:
+                server.starttls()
+                server.login(self.sender_email, self.sender_password)
+                server.send_message(msg)
+            logger.info(f"✓ Email sent to {target_email}")
+            return True
+        except Exception as e:
+            logger.error(f"✗ Email failed: {e}")
+            return False
+
+# ============================================================================
+# SESSION STATE INITIALIZATION
+# ============================================================================
+
+if 'user' not in st.session_state:
+    st.session_state.user = None
 
 if 'current_page' not in st.session_state:
     st.session_state.current_page = "dashboard"
 
-st.set_page_config(page_title="Stock Alerts", layout="wide", initial_sidebar_state="collapsed")
-st.markdown(DARK_THEME, unsafe_allow_html=True)
+if 'monitoring' not in st.session_state:
+    st.session_state.monitoring = False
 
-# Navigation
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    if st.button("Dashboard", use_container_width=True):
-        st.session_state.current_page = "dashboard"
-with col2:
-    if st.button("Alerts", use_container_width=True):
-        st.session_state.current_page = "alerts"
-with col3:
-    if st.button("New Alert", use_container_width=True):
-        st.session_state.current_page = "new_alert"
-with col4:
-    if st.button("Settings", use_container_width=True):
-        st.session_state.current_page = "settings"
+if 'rules' not in st.session_state:
+    st.session_state.rules = []
 
-st.divider()
+if 'last_alert_time' not in st.session_state:
+    st.session_state.last_alert_time = {}
 
-if st.session_state.current_page == "dashboard":
-    st.markdown('<div class="main-header">Dashboard</div>', unsafe_allow_html=True)
-    
-    indices = get_index_data()
-    idx1, idx2, idx3 = st.columns(3)
-    
-    for col, (name, (price, change)) in zip([idx1, idx2, idx3], indices.items()):
-        with col:
-            if price:
-                st.metric(name, f"${price:,.2f}", f"{change:+.2f}%")
-    
-    st.markdown('<div class="main-header">Watchlist - Live Prices</div>', unsafe_allow_html=True)
-    
-    for rule in st.session_state.rules:
-        if rule.get('active', True):
-            price, change = get_stock_price(rule['symbol'])
-            col_a, col_b, col_c, col_d = st.columns([1, 2, 2, 1])
-            with col_a:
-                st.markdown(f"**{rule['symbol']}**")
-            with col_b:
-                if price:
-                    st.metric("Price", f"${price:.2f}", f"{change:+.2f}%")
-                else:
-                    st.write("Loading...")
-            with col_c:
-                st.caption(f"Target: ${rule.get('target', 0):.2f}")
-                if price and rule.get('target'):
-                    diff = ((rule['target'] - price) / price) * 100
-                    st.caption(f"Distance: {diff:+.1f}%")
-            with col_d:
-                if price and rule['min_price'] <= price <= rule['max_price']:
-                    st.success("IN RANGE")
-            st.divider()
-    
-    if st.button("Refresh Prices"):
-        st.cache_data.clear()
-        st.rerun()
+notifier = NotificationManager()
 
-elif st.session_state.current_page == "alerts":
-    st.markdown('<div class="main-header">Active Alerts</div>', unsafe_allow_html=True)
-    
-    for i, rule in enumerate(st.session_state.rules):
-        price, change = get_stock_price(rule['symbol'])
-        with st.container():
-            col1, col2, col3, col4 = st.columns([1, 2, 2, 1])
-            with col1:
-                st.markdown(f"**{rule['symbol']}**")
-                st.caption(f"${price:.2f}" if price else "N/A")
-            with col2:
-                st.write(f"Range: ${rule['min_price']:.2f} - ${rule['max_price']:.2f}")
-                if price:
-                    progress = (price - rule['min_price']) / (rule['max_price'] - rule['min_price'])
-                    st.progress(min(max(progress, 0), 1))
-            with col3:
-                st.caption(f"Target: ${rule.get('target', 0):.2f}")
-                alerts = []
-                if rule.get('notify_email'): alerts.append("Email")
-                st.caption(" | ".join(alerts))
-            with col4:
-                rule['active'] = st.toggle("Active", value=rule.get('active', True), key=f"toggle_{i}")
-                if st.button("Delete", key=f"del_{i}"):
-                    st.session_state.rules.pop(i)
-                    save_rules(st.session_state.rules)
-                    st.rerun()
-            st.divider()
+# ============================================================================
+# APPLY THEME
+# ============================================================================
 
-elif st.session_state.current_page == "new_alert":
-    st.markdown('<div class="main-header">Create New Alert</div>', unsafe_allow_html=True)
+st.markdown(MOBILE_THEME, unsafe_allow_html=True)
+
+# ============================================================================
+# LOGIN/REGISTER SCREEN
+# ============================================================================
+
+if st.session_state.user is None:
+    col1, col2, col3 = st.columns([1, 2, 1])
     
-    symbol = st.text_input("Stock Symbol", placeholder="AAPL, TSLA, NVDA...").upper()
-    
-    if symbol:
-        price, change = get_stock_price(symbol)
-        if price:
-            st.success(f"Current price: ${price:.2f} ({change:+.2f}%)")
-        else:
-            st.warning("Symbol not found")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        min_price = st.number_input("Min Price ($)", min_value=0.0, step=1.0)
     with col2:
-        max_price = st.number_input("Max Price ($)", min_value=0.0, step=1.0)
-    
-    target = st.number_input("Target Price ($)", min_value=0.0, step=1.0)
-    
-    notify_email = st.checkbox("Email Alert", value=True)
-    
-    if st.button("Create Alert", type="primary", use_container_width=True):
-        if symbol and max_price > min_price:
-            new_rule = {
-                "symbol": symbol,
-                "min_price": min_price,
-                "max_price": max_price,
-                "target": target,
-                "notify_email": notify_email,
-                "active": True
-            }
-            st.session_state.rules.append(new_rule)
-            save_rules(st.session_state.rules)
-            st.success(f"Alert created for {symbol}!")
-            st.balloons()
-        else:
-            st.error("Please fill all fields correctly")
-
-elif st.session_state.current_page == "settings":
-    st.markdown('<div class="main-header">Settings</div>', unsafe_allow_html=True)
-    
-    st.subheader("System Information")
-    st.info("Stock Alerts Agent v2.0 - Production Grade")
-    st.info("Data Source: Yahoo Finance")
-    st.info("Email notifications disabled - running in mock mode")
-    
-    if st.button("Save Settings", type="primary"):
-        st.success("Settings saved!")
-
-st.markdown("---")
-st.caption(f"v2.0 | Stock Alerts | Production Grade | Last update: {datetime.now().strftime('%H:%M:%S')}")
-logger.info("Application rendered successfully")
+        st.markdown('<div class="login-container">', unsafe_allow_html=True)
+        
+        # Logo
+        st.markdown('<div class="app-logo">🦅</div>', unsafe_allow_html=True)
+        st.markdown('<div class="app-title">Stock Sentinel Pro</div>', unsafe_allow_html=True)
+        st.markdown('<p style="text-align: center; color: #64748b; font-size: 14px;">מערכת ניהול התראות מניות מ
