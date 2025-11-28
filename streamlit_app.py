@@ -1,62 +1,65 @@
-"""Stock Alerts v2.6 - Email as Username"""
+"""Stock Alerts v3.0 - Complete Redesign"""
 import streamlit as st
-import json
-import os
+import json, os, hashlib, time
 import yfinance as yf
-import hashlib
 from datetime import datetime
 
 st.set_page_config(page_title="Stock Alerts", page_icon="📈", layout="wide")
 
-USERS_FILE = "users.json"
-RULES_FILE = "rules.json"
+USERS_FILE, RULES_FILE = "users.json", "rules.json"
 
 def load_users():
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, 'r') as f:
-            return json.load(f)
-    return {}
+    return json.load(open(USERS_FILE)) if os.path.exists(USERS_FILE) else {}
 
 def save_users(users):
-    with open(USERS_FILE, 'w') as f:
-        json.dump(users, f, indent=2)
+    with open(USERS_FILE, 'w') as f: json.dump(users, f, indent=2)
 
-def login(email, password):
+def login(email, pw):
     users = load_users()
-    if email in users:
-        pw_hash = hashlib.sha256(password.encode()).hexdigest()
-        if users[email]['password'] == pw_hash:
-            return users[email]
+    if email in users and users[email]['password'] == hashlib.sha256(pw.encode()).hexdigest():
+        return users[email]
     return None
 
-def register(email, password):
+def register(email, pw):
     users = load_users()
-    if email in users:
-        return False
-    users[email] = {
-        'password': hashlib.sha256(password.encode()).hexdigest(),
-        'created': datetime.now().isoformat()
-    }
+    if email in users: return False
+    users[email] = {'password': hashlib.sha256(pw.encode()).hexdigest(), 'created': datetime.now().isoformat()}
     save_users(users)
     return True
 
-def get_price(symbol):
-    try:
-        stock = yf.Ticker(symbol)
-        data = stock.history(period='1d')
-        if not data.empty:
-            return data['Close'].iloc[-1]
-    except:
-        pass
+def get_stock_data(symbol, retries=3):
+    for i in range(retries):
+        try:
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period='1d')
+            if not hist.empty:
+                price = hist['Close'].iloc[-1]
+                volume = hist['Volume'].iloc[-1]
+                prev = ticker.info.get('previousClose', price)
+                change = ((price - prev) / prev * 100) if prev else 0
+                return {'price': round(price, 2), 'change': round(change, 2), 'volume': int(volume)}
+            time.sleep(1)
+        except: 
+            if i < retries - 1: time.sleep(2)
     return None
 
-if 'user' not in st.session_state:
-    st.session_state.user = None
+def load_rules(email):
+    if os.path.exists(RULES_FILE):
+        all_rules = json.load(open(RULES_FILE))
+        return all_rules.get(email, [])
+    return []
+
+def save_rules(email, rules):
+    all_rules = json.load(open(RULES_FILE)) if os.path.exists(RULES_FILE) else {}
+    all_rules[email] = rules
+    with open(RULES_FILE, 'w') as f: json.dump(all_rules, f, indent=2)
+
+if 'user' not in st.session_state: st.session_state.user = None
+if 'rules' not in st.session_state: st.session_state.rules = []
 
 if st.session_state.user is None:
-    st.title("📈 Stock Alerts - כניסה")
+    st.title("📈 Stock Alerts")
     tab1, tab2 = st.tabs(["כניסה", "הרשמה"])
-    
     with tab1:
         with st.form("login"):
             email = st.text_input("אימייל", placeholder="example@gmail.com")
@@ -65,48 +68,63 @@ if st.session_state.user is None:
                 profile = login(email, pw)
                 if profile:
                     st.session_state.user = {'email': email, **profile}
+                    st.session_state.rules = load_rules(email)
                     st.rerun()
-                else:
-                    st.error("אימייל או סיסמה שגויים")
-    
+                else: st.error("שגיאה")
     with tab2:
-        with st.form("register"):
-            new_email = st.text_input("אימייל", placeholder="example@gmail.com")
-            new_pw = st.text_input("סיסמה", type="password")
-            confirm_pw = st.text_input("אימות סיסמה", type="password")
+        with st.form("reg"):
+            email = st.text_input("אימייל")
+            pw = st.text_input("סיסמה", type="password")
+            pw2 = st.text_input("אימות", type="password")
             if st.form_submit_button("הרשם"):
-                if new_pw != confirm_pw:
-                    st.error("הסיסמאות לא זהות")
-                elif not new_email or '@' not in new_email:
-                    st.error("אנא הכנס אימייל תקין")
-                elif register(new_email, new_pw):
-                    st.success("נרשמת בהצלחה! עבור לכרטיסיית כניסה")
-                else:
-                    st.error("האימייל כבר רשום")
+                if pw != pw2: st.error("סיסמאות לא זהות")
+                elif register(email, pw): st.success("הצלחה!")
+                else: st.error("תפוס")
 else:
-    st.sidebar.title(f"שלום")
-    st.sidebar.caption(st.session_state.user['email'])
-    if st.sidebar.button("יציאה"):
-        st.session_state.user = None
+    with st.sidebar:
+        st.caption(st.session_state.user['email'])
+        if st.button("יציאה"):
+            st.session_state.user = None
+            st.rerun()
+    
+    st.title("📈 לוח בקרה")
+    
+    indices = {'^GSPC': 'S&P 500', '^IXIC': 'NASDAQ', 'BTC-USD': 'BITCOIN'}
+    cols = st.columns(3)
+    for col, (sym, name) in zip(cols, indices.items()):
+        data = get_stock_data(sym)
+        if data:
+            col.metric(name, f"${data['price']:,.2f}", f"{data['change']:+.2f}%")
+    
+    st.divider()
+    st.subheader("התראות שלי")
+    
+    for i, rule in enumerate(st.session_state.rules):
+        data = get_stock_data(rule['symbol'])
+        if data:
+            c1,c2,c3,c4,c5 = st.columns([1,2,2,2,1])
+            c1.write(f"**{rule['symbol']}**")
+            c2.metric("מחיר", f"${data['price']}")
+            c3.caption(f"ווליום: {data['volume']:,}")
+            c4.caption(f"טווח: {rule['min']}-{rule['max']}")
+            if c5.button("✖️", key=f"del_{i}"):
+                st.session_state.rules.pop(i)
+                save_rules(st.session_state.user['email'], st.session_state.rules)
+                st.rerun()
+    
+    st.divider()
+    if st.button("➕ הוסף התראה"):
+        st.session_state.show_add = True
         st.rerun()
     
-    st.title("📊 לוח התראות")
+    if st.session_state.get('show_add'):
+        with st.form("add_alert"):
+            sym = st.text_input("סימול")
+            price_range = st.slider("טווח מחיר", 0.0, 5000.0, (100.0, 500.0))
+            if st.form_submit_button("שמור"):
+                st.session_state.rules.append({'symbol': sym, 'min': price_range[0], 'max': price_range[1]})
+                save_rules(st.session_state.user['email'], st.session_state.rules)
+                st.session_state.show_add = False
+                st.rerun()
     
-    st.subheader("הוסף התראה חדשה")
-    col1, col2, col3 = st.columns(3)
-    symbol = col1.text_input("סימול", "AAPL")
-    min_price = col2.number_input("מחיר מינימום", 0.0)
-    max_price = col3.number_input("מחיר מקסימום", 999.0)
-    
-    if st.button("בדוק מחיר"):
-        price = get_price(symbol)
-        if price:
-            st.metric(symbol, f"${price:.2f}")
-            if min_price <= price <= max_price:
-                st.success("✅ המחיר בטווח!")
-            else:
-                st.warning("⚠️ המחיר מחוץ לטווח")
-        else:
-            st.error("לא נמצא")
-    
-    st.caption(f"v2.6 | {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"v3.0 | {datetime.now().strftime('%H:%M:%S')}")
