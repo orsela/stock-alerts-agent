@@ -2,3 +2,5 @@ streamlit==1.28.0
 yfinance==0.2.32
 
 twilio==9.0.4
+
+streamlit-google-auth==0.2.3
