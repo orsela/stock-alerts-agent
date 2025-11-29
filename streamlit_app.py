@@ -1,4 +1,4 @@
-"""Stock Alerts v3.1 - Fixed AttributeError in load_rules"""
+"""Stock Alerts v3.2 - Twilio WhatsApp + After-Hours Close Price"""
 import streamlit as st
 import json, os, hashlib, time
 import yfinance as yf
@@ -32,25 +32,80 @@ def get_stock_data(symbol):
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info
+        
+        # Try to get current/regular market price first
         current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+        
+        # If not available (after hours), use previous close
+        if not current_price:
+            current_price = info.get('previousClose')
+        
         prev_close = info.get('previousClose')
         volume = info.get('volume', 0)
         
         if current_price and prev_close:
             change = ((current_price - prev_close) / prev_close * 100)
+            
+            # Check if market is open
+            market_state = info.get('marketState', 'CLOSED')
+            is_after_hours = market_state in ['CLOSED', 'PRE', 'POST']
+            
             return {
                 'price': round(current_price, 2), 
                 'change': round(change, 2), 
-                'volume': int(volume)
+                'volume': int(volume),
+                'is_after_hours': is_after_hours,
+                'market_state': market_state
             }
     except:
         pass
     return None
 
+def send_whatsapp_alert(phone, symbol, price, rule_min, rule_max, twilio_sid, twilio_token, twilio_from):
+    try:
+        from twilio.rest import Client
+        client = Client(twilio_sid, twilio_token)
+        message = f"אזהרת מחיר 📈\n\nסימול: {symbol}\nמחיר נוכחי: ${price}\nטווח: ${rule_min}-${rule_max}"
+        msg = client.messages.create(
+            from_=f'whatsapp:{twilio_from}',
+            body=message,
+            to=f'whatsapp:{phone}'
+        )
+        return True
+    except Exception as e:
+        st.error(f"שגיאה בשליחת WhatsApp: {str(e)}")
+        return False
+
+def check_alerts_and_notify():
+    if 'twilio_sid' not in st.session_state or not st.session_state.twilio_sid:
+        return
+    
+    for rule in st.session_state.rules:
+        if 'phone' not in rule or not rule['phone']:
+            continue
+            
+        data = get_stock_data(rule['symbol'])
+        if data and data['price']:
+            price = data['price']
+            # Check if price is outside the range
+            if price < rule['min'] or price > rule['max']:
+                if 'last_alert' not in rule or (datetime.now() - datetime.fromisoformat(rule.get('last_alert', '2000-01-01'))).seconds > 3600:
+                    if send_whatsapp_alert(
+                        rule['phone'], 
+                        rule['symbol'], 
+                        price, 
+                        rule['min'], 
+                        rule['max'],
+                        st.session_state.twilio_sid,
+                        st.session_state.twilio_token,
+                        st.session_state.twilio_from
+                    ):
+                        rule['last_alert'] = datetime.now().isoformat()
+                        save_rules(st.session_state.user['email'], st.session_state.rules)
+
 def load_rules(email):
     if os.path.exists(RULES_FILE):
         all_rules = json.load(open(RULES_FILE))
-        # Handle cases where rules.json might be a list (from old versions)
         if isinstance(all_rules, list):
             return []
         if isinstance(all_rules, dict):
@@ -59,7 +114,6 @@ def load_rules(email):
 
 def save_rules(email, rules):
     all_rules = json.load(open(RULES_FILE)) if os.path.exists(RULES_FILE) else {}
-    # Ensure all_rules is always a dictionary
     if not isinstance(all_rules, dict):
         all_rules = {}
     all_rules[email] = rules
@@ -67,6 +121,9 @@ def save_rules(email, rules):
 
 if 'user' not in st.session_state: st.session_state.user = None
 if 'rules' not in st.session_state: st.session_state.rules = []
+if 'twilio_sid' not in st.session_state: st.session_state.twilio_sid = ""
+if 'twilio_token' not in st.session_state: st.session_state.twilio_token = ""
+if 'twilio_from' not in st.session_state: st.session_state.twilio_from = ""
 
 if st.session_state.user is None:
     st.title("📈 Stock Alerts")
@@ -96,11 +153,21 @@ if st.session_state.user is None:
 else:
     with st.sidebar:
         st.caption(st.session_state.user['email'])
+        
+        with st.expander("⚙️ הגדרות Twilio WhatsApp"):
+            st.info("💡 להתראות WhatsApp - צריך חשבון Twilio")
+            st.session_state.twilio_sid = st.text_input("Account SID", value=st.session_state.twilio_sid, type="password")
+            st.session_state.twilio_token = st.text_input("Auth Token", value=st.session_state.twilio_token, type="password")
+            st.session_state.twilio_from = st.text_input("Twilio WhatsApp Number", value=st.session_state.twilio_from, placeholder="+14155238886")
+        
         if st.button("יציאה"):
             st.session_state.user = None
             st.rerun()
     
     st.title("📈 לוח בקרה")
+    
+    # Check alerts
+    check_alerts_and_notify()
     
     # Market indices
     indices = {'^GSPC': 'S&P 500', '^IXIC': 'NASDAQ', 'BTC-USD': 'BITCOIN'}
@@ -109,7 +176,9 @@ else:
         with col:
             data = get_stock_data(sym)
             if data:
-                col.metric(name, f"${data['price']:,.2f}", f"{data['change']:+.2f}%")
+                # Show close price indicator if after hours
+                label = f"{name} {'🌙 (סגירה)' if data.get('is_after_hours') else ''}"
+                col.metric(label, f"${data['price']:,.2f}", f"{data['change']:+.2f}%")
             else:
                 col.metric(name, "--", "--")
     
@@ -120,12 +189,26 @@ else:
     for i, rule in enumerate(st.session_state.rules):
         data = get_stock_data(rule['symbol'])
         if data:
-            c1,c2,c3,c4,c5 = st.columns([1,2,2,2,1])
-            c1.write(f"**{rule['symbol']}**")
-            c2.metric("מחיר", f"${data['price']}")
+            c1,c2,c3,c4,c5,c6 = st.columns([1,2,2,2,1,1])
+            
+            # Symbol with after-hours indicator
+            symbol_display = f"**{rule['symbol']}** {'🌙' if data.get('is_after_hours') else ''}"
+            c1.write(symbol_display)
+            
+            # Price with close indicator
+            price_label = "סגירה" if data.get('is_after_hours') else "מחיר"
+            c2.metric(price_label, f"${data['price']}")
+            
             c3.caption(f"ווליום: {data['volume']:,}")
             c4.caption(f"טווח: ${rule['min']}-${rule['max']}")
-            if c5.button("✖️", key=f"del_{i}"):
+            
+            # Alert status indicator
+            if data['price'] < rule['min'] or data['price'] > rule['max']:
+                c5.write("🔴")  # Red circle - out of range
+            else:
+                c5.write("🟢")  # Green circle - in range
+            
+            if c6.button("✖️", key=f"del_{i}"):
                 st.session_state.rules.pop(i)
                 save_rules(st.session_state.user['email'], st.session_state.rules)
                 st.rerun()
@@ -137,12 +220,26 @@ else:
     
     if st.session_state.get('show_add'):
         with st.form("add_alert"):
-            sym = st.text_input("סימול")
+            sym = st.text_input("סימול", placeholder="AAPL, TSLA, NVDA...")
             price_range = st.slider("טווח מחיר", 0.0, 5000.0, (100.0, 500.0))
-            if st.form_submit_button("שמור"):
-                st.session_state.rules.append({'symbol': sym, 'min': price_range[0], 'max': price_range[1]})
-                save_rules(st.session_state.user['email'], st.session_state.rules)
-                st.session_state.show_add = False
-                st.rerun()
+            phone = st.text_input("מספר WhatsApp (אופציונלי)", placeholder="+972501234567")
+            st.caption("💡 להתראות WhatsApp - הגדר את Twilio בסיידבר")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.form_submit_button("שמור"):
+                    st.session_state.rules.append({
+                        'symbol': sym.upper(), 
+                        'min': price_range[0], 
+                        'max': price_range[1],
+                        'phone': phone if phone else None
+                    })
+                    save_rules(st.session_state.user['email'], st.session_state.rules)
+                    st.session_state.show_add = False
+                    st.rerun()
+            with col2:
+                if st.form_submit_button("ביטול"):
+                    st.session_state.show_add = False
+                    st.rerun()
     
-    st.caption(f"v3.1 | {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"v3.2 | {datetime.now().strftime('%H:%M:%S')}")
